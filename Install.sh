@@ -2,9 +2,9 @@
 set -e
 
 echo "=================================================="
-echo "===  1. АВТОМАТИЧЕСКАЯ ПОЧИНКА И СБРОС PACMAN  ==="
+echo "===  1. АВТОМАТИЧЕСКАЯ ПОЧИНКА И НАСТРОЙКА PACMAN ==="
 echo "=================================================="
-# Создаем идеальный чистый конфиг pacman с нуля, чтобы не было ошибок
+# Создаем чистый конфиг с включенным multilib для Steam
 sudo tee /etc/pacman.conf << 'EOF'
 [options]
 HoldPkg     = pacman glibc
@@ -18,6 +18,9 @@ LocalFileSigLevel = Optional
 Include = /etc/pacman.d/mirrorlist
 
 [extra]
+Include = /etc/pacman.d/mirrorlist
+
+[multilib]
 Include = /etc/pacman.d/mirrorlist
 EOF
 
