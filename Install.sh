@@ -1,72 +1,80 @@
 #!/bin/bash
-
-# Настройка вывода ошибок, чтобы скрипт не шел дальше, если что-то сломалось
 set -e
 
 echo "=================================================="
-echo "=== ЗАПУСК 100% АВТОМАТИЧЕСКОЙ СБОРКИ СИСТЕМЫ ==="
+echo "===  1. АВТОМАТИЧЕСКАЯ ПОЧИНКА И СБРОС PACMAN  ==="
 echo "=================================================="
+# Создаем идеальный чистый конфиг pacman с нуля, чтобы не было ошибок
+sudo tee /etc/pacman.conf << 'EOF'
+[options]
+HoldPkg     = pacman glibc
+Architecture = auto
+Color
+CheckSpace
+SigLevel    = Required DatabaseOptional
+LocalFileSigLevel = Optional
 
-# 1. Синхронизируем базы пакетов и обновляем ключи
-echo "[*] Обновление системных баз пакетов..."
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+EOF
+
+echo "=================================================="
+echo "===    2. ОБНОВЛЕНИЕ И УСТАНОВКА ПРОГРАММ       ==="
+echo "=================================================="
+echo "[*] Обновление баз пакетов..."
 sudo pacman -Syu --noconfirm
 
-# 2. Установка базовых утилит сборки, заголовков ядра и DKMS
-echo "[*] Установка инструментов компиляции и DKMS..."
+echo "[*] Установка инструментов компиляции и заголовков ядра..."
 sudo pacman -S --needed base-devel git dkms linux-headers --noconfirm
 
-# 3. Установка графического сервера, i3wm и Стима
-echo "[*] Установка графического окружения и Steam..."
+echo "[*] Установка графики, Steam, Telegram, Discord и звука..."
 sudo pacman -S --needed xorg-server xorg-xinit i3-wm steam dmenu lxsession telegram-desktop discord networkmanager pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber ntfs-3g --noconfirm
 
-# 4. Скачивание и принудительная сборка драйвера Nvidia Legacy (470xx)
-echo "[*] Сборка и установка драйверов Nvidia 470xx..."
-# Используем стабильный билд из официального репозитория Arch / AUR
-if ! pacman -Qi nvidia-470xx-dkms &>/dev/null; then
-    # Если ставишь через yay, скрипт его подтянет, но для надежности ставим dkms версию
-    sudo pacman -S nvidia-dkms nvidia-utils lib32-nvidia-utils --noconfirm || true
-fi
+echo "=================================================="
+echo "===         3. НАСТРОЙКА ДРАЙВЕРОВ NVIDIA       ==="
+echo "=================================================="
+echo "[*] Сборка драйверов Nvidia..."
+sudo pacman -S nvidia-dkms nvidia-utils lib32-nvidia-utils --noconfirm || true
 
-# Принудительно заставляем DKMS собрать модуль под текущее ядро 7.0.10
-echo "[*] Компиляция модулей ядра для видеокарты..."
+echo "[*] Компиляция модулей ядра..."
 sudo dkms autoinstall
-
-# Блокируем свободный драйвер nouveau, который вызывает черный экран
 echo "blacklist nouveau" | sudo tee /etc/modprobe.d/blacklist-nouveau.conf
-
-# Пересобираем загрузочный образ initramfs с новыми модулями Nvidia
 sudo mkinitcpio -P
 
-# 5. Монтирование твоего жесткого диска с играми (без форматирования!)
-echo "[*] Настройка монтирования HDD под Доту..."
+echo "=================================================="
+echo "===         4. МОНТИРОВАНИЕ ДИСКА ПОД ДОТУ      ==="
+echo "=================================================="
 sudo mkdir -p /mnt/storage
 if ! grep -q "/mnt/storage" /etc/fstab; then
     echo -e "\n/dev/sda1 /mnt/storage ntfs-3g defaults,nofail,uid=1000,gid=1000,dmask=022,fmask=133 0 0" | sudo tee -a /etc/fstab
 fi
-sudo mount -a || echo "Предупреждение: Диск /dev/sda1 пока не подключен, примонтируется при ребуте."
+sudo mount -a || echo "Диск примонтируется после перезагрузки."
 
-# 6. Настройка автоматического входа в систему без ввода пароля
-echo "[*] Настройка автологина пользователя..."
-USER_NAME=$(whoami)
+echo "=================================================="
+echo "===         5. АВТОЛОГИН И АВТОЗАПУСК СТИМА     ==="
+echo "=================================================="
+USER_NAME="kirill"
 sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
 echo -e "[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin $USER_NAME --noclear %I \$TERM" | sudo tee /etc/systemd/system/getty@tty1.service.d/override.conf
 
-# Автостарт иксов (X11) сразу при логине в tty1
-truncate -s 0 ~/.bash_profile
-echo -e "\nif [ -z \"\${DISPLAY}\" ] && [ \"\${XDG_VTNR}\" -eq 1 ]; then\n  exec startx\nfi" >> ~/.bash_profile
+# Настраиваем запуск иксов при входе в tty1
+truncate -s 0 /home/$USER_NAME/.bash_profile
+echo -e "\nif [ -z \"\${DISPLAY}\" ] && [ \"\${XDG_VTNR}\" -eq 1 ]; then\n  exec startx\nfi" | sudo tee -a /home/$USER_NAME/.bash_profile
+sudo chown $USER_NAME:$USER_NAME /home/$USER_NAME/.bash_profile
 
-# 7. Настройка чистого запуска Steam Big Picture без зависаний
-echo "[*] Создание чистого графического конфига..."
-echo "exec steam -tenfoot" > ~/.xinitrc
-chmod +x ~/.xinitrc
+# Прописываем запуск Steam в Big Picture (Режим консоли)
+echo "exec steam -tenfoot" | sudo tee /home/$USER_NAME/.xinitrc
+sudo chmod +x /home/$USER_NAME/.xinitrc
+sudo chown $USER_NAME:$USER_NAME /home/$USER_NAME/.xinitrc
 
-# 8. Включение службы сети
-sudo systemctl enable --now NetworkManager
+# Включаем сеть
+sudo systemctl enable NetworkManager
 
 echo "=================================================="
-echo "===     СБОРКА ЗАВЕРШЕНА! РЕБУТАЕМ НОУТ        ==="
+echo "===    ВСЁ ГОТОВО! НОУТ УХОДИТ В ПЕРЕЗАГРУЗКУ   ==="
 echo "=================================================="
 sleep 3
 sudo reboot
-
-
