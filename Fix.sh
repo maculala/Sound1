@@ -1,34 +1,53 @@
+cat << 'EOF' > ~/fix_steam_all.sh
 #!/bin/bash
 
-echo "=== Запуск фикса Стима и Доты ==="
+echo "=== Полная настройка Стима и Автозагрузки ==="
 
-# 1. Жестко закрываем Стим, если он запущен
+# 1. Вырубаем Стим под корень
 sudo pkill -9 steam 2>/dev/null
 sleep 1
 
-# 2. Сбрасываем Big Picture / GamepadUI в обычный десктопный режим
-REG_FILE="$HOME/.local/share/Steam/registry.vdf"
-if [ -f "$REG_FILE" ]; then
-    echo "Настраиваем обычный оконный режим..."
-    # Удаляем старые переключатели интерфейса, если они есть
-    sed -i '/"StartupToGamepadUI"/d' "$REG_FILE"
-    sed -i '/"ConnectToSubManager"/d' "$REG_FILE"
-    
-    # Прописываем принудительный запуск в десктопе перед закрывающей скобкой
-    sed -i 's/"Steam"[[:space:]]*{/"Steam"\n    {\n      "StartupToGamepadUI" "0"\n      "ConnectToSubManager" "0"/1' "$REG_FILE"
-fi
+# 2. Создаем чистый registry.vdf, блокирующий Big Picture
+mkdir -p ~/.local/share/Steam/
+cat << 'INNER_EOF' > ~/.local/share/Steam/registry.vdf
+"Registry"
+{
+  "HKCU"
+  {
+    "Software"
+    {
+      "Valve"
+      {
+        "Steam"
+        {
+          "StartupToGamepadUI" "0"
+          "ConnectToSubManager" "0"
+        }
+      }
+    }
+  }
+}
+INNER_EOF
 
-# 3. Чистим конфликтующие пустые папки, которые Стим создал при попытке скачивания
+# 3. Добавляем Стим в автозагрузку системы в обычном оконном режиме
+mkdir -p ~/.config/autostart
+cat << 'INNER_EOF' > ~/.config/autostart/steam.desktop
+[Desktop Entry]
+Name=Steam
+Comment=Application for managing and playing games on Steam
+Exec=/usr/bin/steam -silent
+Icon=steam
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Game;
+INNER_EOF
+
+# 4. Чистим мусор и привязываем Доту с внешнего диска
 STEAM_APPS="$HOME/.local/share/Steam/steamapps"
-echo "Очищаем мусорные папки в домашнем каталоге..."
-rm -rf "$STEAM_APPS/common"
-rm -rf "$STEAM_APPS/downloading"
-rm -rf "$STEAM_APPS/appmanifest_570.acf"
-
-# Создаем чистую папку common, если её нет
+rm -rf "$STEAM_APPS/common" "$STEAM_APPS/downloading" "$STEAM_APPS/appmanifest_570.acf"
 mkdir -p "$STEAM_APPS/common"
 
-# 4. Ищем, где именно на внешнем диске лежат файлы Доты
+# Проверяем, где лежит Дота на /mnt/storage
 if [ -d "/mnt/storage/SteamLibrary/steamapps" ]; then
     SOURCE_DIR="/mnt/storage/SteamLibrary/steamapps"
 elif [ -d "/mnt/storage/steamapps" ]; then
@@ -37,10 +56,7 @@ else
     SOURCE_DIR="/mnt/storage"
 fi
 
-echo "Найдена папка с играми по пути: $SOURCE_DIR"
-
-# 5. Намертво связываем манифест и файлы Доты с родной папкой Стима
-echo "Создаем символические ссылки на Доту..."
+# Создаем символические ссылки
 if [ -f "$SOURCE_DIR/appmanifest_570.acf" ]; then
     ln -s "$SOURCE_DIR/appmanifest_570.acf" "$STEAM_APPS/"
 fi
@@ -51,4 +67,8 @@ elif [ -d "$SOURCE_DIR/dota 2 beta" ]; then
     ln -s "$SOURCE_DIR/dota 2 beta" "$STEAM_APPS/common/"
 fi
 
-echo "[OK] Всё готово! Переключайся в графику (Ctrl+Alt+F1) и запускай Стим."
+echo "[OK] Всё готово! Автозагрузка настроена, обычный режим закреплен."
+EOF
+
+chmod +x ~/fix_steam_all.sh
+~/fix_steam_all.sh
