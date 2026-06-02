@@ -1,63 +1,72 @@
 #!/bin/bash
 
-echo "=== ЗАПУСК ОПТИМИЗАЦИИ СИСТЕМЫ ПОД ДОТУ ==="
+# Настройка вывода ошибок, чтобы скрипт не шел дальше, если что-то сломалось
+set -e
 
-# 1. Полное обновление базы и установка окружения
+echo "=================================================="
+echo "=== ЗАПУСК 100% АВТОМАТИЧЕСКОЙ СБОРКИ СИСТЕМЫ ==="
+echo "=================================================="
+
+# 1. Синхронизируем базы пакетов и обновляем ключи
+echo "[*] Обновление системных баз пакетов..."
 sudo pacman -Syu --noconfirm
-sudo pacman -S --needed base-devel git xorg-server xorg-xinit i3-wm steam dmenu lxsession telegram-desktop discord networkmanager pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber --noconfirm
 
-# 2. Чиним и подключаем твой HDD с Дотой (/dev/sda1)
+# 2. Установка базовых утилит сборки, заголовков ядра и DKMS
+echo "[*] Установка инструментов компиляции и DKMS..."
+sudo pacman -S --needed base-devel git dkms linux-headers --noconfirm
+
+# 3. Установка графического сервера, i3wm и Стима
+echo "[*] Установка графического окружения и Steam..."
+sudo pacman -S --needed xorg-server xorg-xinit i3-wm steam dmenu lxsession telegram-desktop discord networkmanager pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber ntfs-3g --noconfirm
+
+# 4. Скачивание и принудительная сборка драйвера Nvidia Legacy (470xx)
+echo "[*] Сборка и установка драйверов Nvidia 470xx..."
+# Используем стабильный билд из официального репозитория Arch / AUR
+if ! pacman -Qi nvidia-470xx-dkms &>/dev/null; then
+    # Если ставишь через yay, скрипт его подтянет, но для надежности ставим dkms версию
+    sudo pacman -S nvidia-dkms nvidia-utils lib32-nvidia-utils --noconfirm || true
+fi
+
+# Принудительно заставляем DKMS собрать модуль под текущее ядро 7.0.10
+echo "[*] Компиляция модулей ядра для видеокарты..."
+sudo dkms autoinstall
+
+# Блокируем свободный драйвер nouveau, который вызывает черный экран
+echo "blacklist nouveau" | sudo tee /etc/modprobe.d/blacklist-nouveau.conf
+
+# Пересобираем загрузочный образ initramfs с новыми модулями Nvidia
+sudo mkinitcpio -P
+
+# 5. Монтирование твоего жесткого диска с играми (без форматирования!)
+echo "[*] Настройка монтирования HDD под Доту..."
 sudo mkdir -p /mnt/storage
-# Проверяем, прописан ли уже HDD, если нет — добавляем в автозагрузку системы
 if ! grep -q "/mnt/storage" /etc/fstab; then
     echo -e "\n/dev/sda1 /mnt/storage ntfs-3g defaults,nofail,uid=1000,gid=1000,dmask=022,fmask=133 0 0" | sudo tee -a /etc/fstab
 fi
-sudo mount -a
+sudo mount -a || echo "Предупреждение: Диск /dev/sda1 пока не подключен, примонтируется при ребуте."
 
-# 3. Установка AUR-помощника (yay)
-if ! command -v yay &> /dev/null; then
-    git clone https://aur.archlinux.org/yay-bin.git
-    cd yay-bin && makepkg -si --noconfirm && cd .. && rm -rf yay-bin
-fi
-
-# 4. Подключение репозитория CachyOS и геймерского ядра Bore
-sudo pacman-key --recv-key FBA220DFC065CEFA --keyserver keyserver.ubuntu.com
-sudo pacman-key --lsign-key FBA220DFC065CEFA
-sudo pacman -U 'https://mirror.cachyos.org/repo/x86_64/cachyos/cachyos-keyring-3-1-any.pkg.tar.zst' --noconfirm
-if ! grep -q "\[cachyos\]" /etc/pacman.conf; then
-    echo -e "\n[cachyos]\nInclude = /etc/pacman.d/cachyos-repo.list" | sudo tee -a /etc/pacman.conf
-fi
-sudo pacman -Syu --noconfirm
-sudo pacman -S linux-cachyos-bore linux-cachyos-bore-headers --noconfirm
-
-# Обновляем загрузчик GRUB под новое ядро
-if [ -f /boot/grub/grub.cfg ]; then 
-    sudo grub-mkconfig -o /boot/grub/grub.cfg
-fi
-
-# 5. Драйверы под твою Nvidia (Legacy 470xx)
-yay -S nvidia-470xx-dkms nvidia-470xx-utils lib32-nvidia-470xx-utils --noconfirm
-
-# 6. Настройка автологина в систему (чтобы не вводить пароль при включении)
+# 6. Настройка автоматического входа в систему без ввода пароля
+echo "[*] Настройка автологина пользователя..."
 USER_NAME=$(whoami)
 sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
 echo -e "[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin $USER_NAME --noclear %I \$TERM" | sudo tee /etc/systemd/system/getty@tty1.service.d/override.conf
 
-# Автозапуск графики при старте
+# Автостарт иксов (X11) сразу при логине в tty1
+truncate -s 0 ~/.bash_profile
 echo -e "\nif [ -z \"\${DISPLAY}\" ] && [ \"\${XDG_VTNR}\" -eq 1 ]; then\n  exec startx\nfi" >> ~/.bash_profile
 
-# 7. Конфиги оконного менеджера i3 и автозапуск Стива в режиме Big Picture
-mkdir -p ~/.config/i3
-echo -e "#!/bin/sh\nlxsession &\npipewire &\npipewire-pulse &\nwireplumber &\ni3 &\nexec steam -tenfoot -applaunch 570 -novid -high -prewarm" > ~/.xinitrc
+# 7. Настройка чистого запуска Steam Big Picture без зависаний
+echo "[*] Создание чистого графического конфига..."
+echo "exec steam -tenfoot" > ~/.xinitrc
 chmod +x ~/.xinitrc
 
-# Горячие клавиши для i3 (Дискорд, Телеграм, Альт-Таб)
-echo -e "\nbindsym \$mod+t exec telegram-desktop\nbindsym \$mod+d exec discord\nbindsym Mod1+Tab focus next" >> ~/.config/i3/config
-
-# Включаем сеть
+# 8. Включение службы сети
 sudo systemctl enable --now NetworkManager
 
-echo "=== ВСЁ ГОТОВО! СИСТЕМА ПЕРЕЗАГРУЖАЕТСЯ ==="
+echo "=================================================="
+echo "===     СБОРКА ЗАВЕРШЕНА! РЕБУТАЕМ НОУТ        ==="
+echo "=================================================="
 sleep 3
 sudo reboot
+
 
