@@ -1,83 +1,85 @@
 #!/bin/bash
-set -e
 
-echo "=================================================="
-echo "===  1. АВТОМАТИЧЕСКАЯ ПОЧИНКА И НАСТРОЙКА PACMAN ==="
-echo "=================================================="
-# Создаем чистый конфиг с включенным multilib для Steam
-sudo tee /etc/pacman.conf << 'EOF'
-[options]
-HoldPkg     = pacman glibc
-Architecture = auto
-Color
-CheckSpace
-SigLevel    = Required DatabaseOptional
-LocalFileSigLevel = Optional
+echo "=== Запуск супер-конфига: Диск + Чисто Дота ==="
 
-[core]
-Include = /etc/pacman.d/mirrorlist
+# 1. Устанавливаем драйвер для NTFS (если его нет)
+echo "[1/4] Проверка драйвера NTFS..."
+sudo pacman -S --needed --noconfirm ntfs-3g
 
-[extra]
-Include = /etc/pacman.d/mirrorlist
-
-[multilib]
-Include = /etc/pacman.d/mirrorlist
-EOF
-
-echo "=================================================="
-echo "===    2. ОБНОВЛЕНИЕ И УСТАНОВКА ПРОГРАММ       ==="
-echo "=================================================="
-echo "[*] Обновление баз пакетов..."
-sudo pacman -Syu --noconfirm
-
-echo "[*] Установка инструментов компиляции и заголовков ядра..."
-sudo pacman -S --needed base-devel git dkms linux-headers --noconfirm
-
-echo "[*] Установка графики, Steam, Telegram, Discord и звука..."
-sudo pacman -S --needed xorg-server xorg-xinit i3-wm steam dmenu lxsession telegram-desktop discord networkmanager pipewire pipewire-pulse pipewire-alsa pipewire-jack wireplumber ntfs-3g --noconfirm
-
-echo "=================================================="
-echo "===         3. НАСТРОЙКА ДРАЙВЕРОВ NVIDIA       ==="
-echo "=================================================="
-echo "[*] Сборка драйверов Nvidia..."
-sudo pacman -S nvidia-dkms nvidia-utils lib32-nvidia-utils --noconfirm || true
-
-echo "[*] Компиляция модулей ядра..."
-sudo dkms autoinstall
-echo "blacklist nouveau" | sudo tee /etc/modprobe.d/blacklist-nouveau.conf
-sudo mkinitcpio -P
-
-echo "=================================================="
-echo "===         4. МОНТИРОВАНИЕ ДИСКА ПОД ДОТУ      ==="
-echo "=================================================="
-sudo mkdir -p /mnt/storage
-if ! grep -q "/mnt/storage" /etc/fstab; then
-    echo -e "\n/dev/sda1 /mnt/storage ntfs-3g defaults,nofail,uid=1000,gid=1000,dmask=022,fmask=133 0 0" | sudo tee -a /etc/fstab
+# 2. Настройка автомонтирования диска в /etc/fstab
+echo "[2/4] Настройка автозагрузки диска /mnt/storage..."
+# Проверяем, нет ли уже этой записи в fstab, чтобы не дублировать
+if ! grep -q "D20A03F00A03D101" /etc/fstab; then
+    sudo mkdir -p /mnt/storage
+    echo "UUID=D20A03F00A03D101 /mnt/storage ntfs-3g defaults,uid=1000,gid=1000,rw,nofail 0 0" | sudo tee -a /etc/fstab
+    echo "[OK] Диск успешно добавлен в /etc/fstab"
+else
+    echo "[!] Диск уже был прописан в /etc/fstab"
 fi
-sudo mount -a || echo "Диск примонтируется после перезагрузки."
 
-echo "=================================================="
-echo "===         5. АВТОЛОГИН И АВТОЗАПУСК СТИМА     ==="
-echo "=================================================="
-USER_NAME="kirill"
-sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
-echo -e "[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin $USER_NAME --noclear %I \$TERM" | sudo tee /etc/systemd/system/getty@tty1.service.d/override.conf
+# Принудительно монтируем прямо сейчас
+sudo umount /mnt/storage 2>/dev/null
+sudo mount -a
 
-# Настраиваем запуск иксов при входе в tty1
-truncate -s 0 /home/$USER_NAME/.bash_profile
-echo -e "\nif [ -z \"\${DISPLAY}\" ] && [ \"\${XDG_VTNR}\" -eq 1 ]; then\n  exec startx\nfi" | sudo tee -a /home/$USER_NAME/.bash_profile
-sudo chown $USER_NAME:$USER_NAME /home/$USER_NAME/.bash_profile
+# 3. Блокировка Big Picture (убиваем Стим и чистим конфиг)
+echo "[3/4] Сброс интерфейса Стима на обычные окна..."
+sudo pkill -9 steam 2>/dev/null
+mkdir -p ~/.local/share/Steam/
 
-# Прописываем запуск Steam в Big Picture (Режим консоли)
-echo "exec steam -tenfoot" | sudo tee /home/$USER_NAME/.xinitrc
-sudo chmod +x /home/$USER_NAME/.xinitrc
-sudo chown $USER_NAME:$USER_NAME /home/$USER_NAME/.xinitrc
+cat << 'INNER_EOF' > ~/.local/share/Steam/registry.vdf
+"Registry"
+{
+  "HKCU"
+  {
+    "Software"
+    {
+      "Valve"
+      {
+        "Steam"
+        {
+          "StartupToGamepadUI" "0"
+          "ConnectToSubManager" "0"
+        }
+      }
+    }
+  }
+}
+INNER_EOF
 
-# Включаем сеть
-sudo systemctl enable NetworkManager
+# 4. Обновление скрипта автозапуска сессии
+echo "[4/4] Обновление скрипта запуска Доты..."
+cat << 'INNER_EOF' > ~/.local/share/Steam/dota_session.sh
+#!/bin/bash
 
-echo "=================================================="
-echo "===    ВСЁ ГОТОВО! НОУТ УХОДИТ В ПЕРЕЗАГРУЗКУ   ==="
-echo "=================================================="
-sleep 3
-sudo reboot
+# Еще раз страхуемся по поводу конфига перед каждым стартом
+mkdir -p ~/.local/share/Steam/
+cat << 'REG_EOF' > ~/.local/share/Steam/registry.vdf
+"Registry"
+{
+  "HKCU"
+  {
+    "Software"
+    {
+      "Valve"
+      {
+        "Steam"
+        {
+          "StartupToGamepadUI" "0"
+          "ConnectToSubManager" "0"
+        }
+      }
+    }
+  }
+}
+REG_EOF
+
+# Запуск Стима в оконном режиме (-vgui) и старт Доты
+exec /usr/bin/steam -vgui -applaunch 570
+INNER_EOF
+
+chmod +x ~/.local/share/Steam/dota_session.sh
+
+echo "============================================="
+echo "[УСПЕХ] Всё настроено! Диск привязан, режим обновлен."
+echo "Можно отправлять ноут в перезагрузку: sudo reboot"
+echo "============================================="
